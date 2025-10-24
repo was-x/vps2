@@ -13,7 +13,7 @@ RUN apt-get update && \
     dpkg-reconfigure --frontend noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/*
 
-# Install common utilities, SSH, and software-properties-common
+# Install common utilities, SSH, and Python with distutils
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       openssh-server \
@@ -25,16 +25,25 @@ RUN apt-get update && \
       software-properties-common \
       python3 \
       python3-pip \
+      python3-distutils \
+      python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# Python 3.12
+# Python 3.12 with full development packages
 RUN add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
-    apt-get install -y --no-install-recommends python3.12 python3.12-venv && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+      python3.12 \
+      python3.12-venv \
+      python3.12-distutils \
+      python3.12-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Make python3 point to python3.12
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+# Make python3 point to python3.12 and ensure pip works
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
+    curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
+    python3 get-pip.py && \
+    rm get-pip.py
 
 # Install Flask for web server
 RUN pip3 install flask
@@ -75,10 +84,94 @@ RUN echo "Dark" > /etc/hostname
 # Force bash prompt
 RUN echo 'export PS1="root@Dark:\\w# "' >> /root/.bashrc
 
-# Create web server to serve PEM file and status
-RUN echo 'from flask import Flask, send_file, render_template_string\nimport os\nimport subprocess\n\napp = Flask(__name__)\n\n@app.route("/")\ndef home():\n    try:\n        # Get ngrok status\n        result = subprocess.run(["curl", "-s", "http://localhost:4040/api/tunnels"], \n                              capture_output=True, text=True)\n        ngrok_status = result.stdout if result.returncode == 0 else "Unable to fetch ngrok status"\n        \n        html = """\n        <!DOCTYPE html>\n        <html>\n        <head>\n            <title>SSH Server with Ngrok</title>\n            <style>\n                body { font-family: Arial, sans-serif; margin: 40px; }\n                .container { max-width: 800px; margin: 0 auto; }\n                .card { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }\n                .btn { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }\n                pre { background: #333; color: #fff; padding: 15px; border-radius: 5px; overflow-x: auto; }\n            </style>\n        </head>\n        <body>\n            <div class="container">\n                <h1>🚀 SSH Server with Ngrok Tunnel</h1>\n                \n                <div class="card">\n                    <h2>📄 Download SSH Key</h2>\n                    <p>Download your private key for SSH access:</p>\n                    <a href="/download-pem" class="btn">Download PEM File</a>\n                </div>\n\n                <div class="card">\n                    <h2>🔗 Connection Info</h2>\n                    <p><strong>Host:</strong> 2.tcp.us-cal-1.ngrok.io (check ngrok status below for actual host)</p>\n                    <p><strong>Port:</strong> 12822 (check ngrok status below for actual port)</p>\n                    <p><strong>Username:</strong> root</p>\n                    <p><strong>Authentication:</strong> Use the downloaded PEM file</p>\n                </div>\n\n                <div class="card">\n                    <h2>🔌 SSH Command</h2>\n                    <pre>ssh -i ssh-key.pem root@2.tcp.us-cal-1.ngrok.io -p 12822</pre>\n                </div>\n\n                <div class="card">\n                    <h2>📊 Ngrok Status</h2>\n                    <pre>{{ ngrok_status }}</pre>\n                </div>\n            </div>\n        </body>\n        </html>\n        """\n        return render_template_string(html, ngrok_status=ngrok_status)\n    except Exception as e:\n        return f"Error: {str(e)}"\n\n@app.route("/download-pem")\ndef download_pem():\n    return send_file("/root/ssh-key.pem", \n                     as_attachment=True, \n                     download_name="ssh-key.pem",\n                     mimetype="application/x-pem-file")\n\n@app.route("/health")\ndef health():\n    return "OK"\n\nif __name__ == "__main__":\n    app.run(host="0.0.0.0", port=5000)' > /app.py
+# Create a simple web server to serve PEM file (using Python http.server instead of Flask)
+RUN echo '#!/bin/bash\n\
+# Simple status page\n\
+cat > /status.html << EOF\n\
+<!DOCTYPE html>\n\
+<html>\n\
+<head>\n\
+    <title>SSH Server with Ngrok</title>\n\
+    <style>\n\
+        body { font-family: Arial, sans-serif; margin: 40px; }\n\
+        .container { max-width: 800px; margin: 0 auto; }\n\
+        .card { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }\n\
+        .btn { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }\n\
+        pre { background: #333; color: #fff; padding: 15px; border-radius: 5px; overflow-x: auto; }\n\
+    </style>\n\
+</head>\n\
+<body>\n\
+    <div class="container">\n\
+        <h1>🚀 SSH Server with Ngrok Tunnel</h1>\n\
+        \n\
+        <div class="card">\n\
+            <h2>📄 Download SSH Key</h2>\n\
+            <p>Download your private key for SSH access:</p>\n\
+            <a href="/ssh-key.pem" class="btn">Download PEM File</a>\n\
+        </div>\n\
+\n\
+        <div class="card">\n\
+            <h2>🔗 Connection Info</h2>\n\
+            <p><strong>Host:</strong> Check ngrok status below</p>\n\
+            <p><strong>Port:</strong> Check ngrok status below</p>\n\
+            <p><strong>Username:</strong> root</p>\n\
+            <p><strong>Authentication:</strong> Use the downloaded PEM file</p>\n\
+        </div>\n\
+\n\
+        <div class="card">\n\
+            <h2>🔌 SSH Command</h2>\n\
+            <pre id="ssh-command">ssh -i ssh-key.pem root@HOST -p PORT</pre>\n\
+        </div>\n\
+\n\
+        <div class="card">\n\
+            <h2>📊 Ngrok Status</h2>\n\
+            <pre id="ngrok-status">Loading ngrok status...</pre>\n\
+        </div>\n\
+\n\
+        <div class="card">\n\
+            <h2>🔄 Health Check</h2>\n\
+            <p>Service status: <span style="color: green;">✅ Active</span></p>\n\
+            <p>SSH Server: <span style="color: green;">✅ Running on 0.0.0.0:22</span></p>\n\
+            <p>Web Server: <span style="color: green;">✅ Running on 0.0.0.0:5000</span></p>\n\
+        </div>\n\
+    </div>\n\
+\n\
+    <script>\n\
+        // Fetch ngrok status\n\
+        fetch(\"http://localhost:4040/api/tunnels\")\n\
+            .then(response => response.json())\n\
+            .then(data => {\n\
+                if (data.tunnels && data.tunnels.length > 0) {\n\
+                    const tunnel = data.tunnels[0];\n\
+                    document.getElementById(\"ngrok-status\").textContent = JSON.stringify(data, null, 2);\n\
+                    \n\
+                    // Update SSH command with actual host and port\n\
+                    const url = new URL(tunnel.public_url);\n\
+                    const host = url.hostname;\n\
+                    const port = url.port;\n\
+                    document.getElementById(\"ssh-command\").textContent = \n\
+                        `ssh -i ssh-key.pem root@${host} -p ${port}`;\n\
+                }\n\
+            })\n\
+            .catch(error => {\n\
+                document.getElementById(\"ngrok-status\").textContent = \n\
+                    "Error fetching ngrok status: " + error.message;\n\
+            });\n\
+    </script>\n\
+</body>\n\
+</html>\n\
+EOF\n\
+\n\
+# Start web server in background\n\
+cd / && python3 -m http.server 5000 --bind 0.0.0.0 &\n\
+\n\
+# Start SSH\n/usr/sbin/sshd -D &\n\
+\n\
+# Start ngrok\necho "Starting ngrok..."\nngrok tcp 22 --log=stdout' > /start.sh
+
+RUN chmod +x /start.sh
 
 EXPOSE 22 5000
 
-# Start all services
-CMD ["sh", "-c", "/usr/sbin/sshd -D & python3 /app.py & ngrok tcp 22 --log=stdout"]
+# Use the start script
+CMD ["/start.sh"]
